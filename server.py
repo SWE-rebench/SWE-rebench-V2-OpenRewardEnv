@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from openreward import AsyncOpenReward, SandboxSettings
 from openreward.environments import Environment, Server, tool
@@ -20,14 +21,32 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "/orwd_data"))
 _table = None  # pyarrow.Table, lazily loaded
 
 
+def _has_valid_docker_specs(row_dict: dict) -> bool:
+    """Check if a row has a valid (non-None) docker_specs in its install_config."""
+    ic = row_dict.get("install_config", {})
+    if isinstance(ic, str):
+        ic = json.loads(ic)
+    return ic.get("docker_specs") is not None
+
+
 def _load_table():
-    """Load parquet files from DATA_DIR into a global Arrow table (lazy, cached)."""
+    """Load parquet files from DATA_DIR into a global Arrow table (lazy, cached).
+
+    Filters out rows whose install_config has no docker_specs.
+    """
     global _table
     if _table is None:
         parquet_files = sorted(DATA_DIR.glob("*.parquet"))
         if not parquet_files:
             raise FileNotFoundError(f"No .parquet files found in {DATA_DIR}")
-        _table = pq.read_table(DATA_DIR)
+        full_table = pq.read_table(DATA_DIR)
+        # Filter out tasks with missing docker_specs
+        keep = []
+        for i in range(len(full_table)):
+            row = {k: v[0] for k, v in full_table.slice(i, 1).to_pydict().items()}
+            keep.append(_has_valid_docker_specs(row))
+        mask = pa.array(keep)
+        _table = full_table.filter(mask)
     return _table
 
 
@@ -44,7 +63,7 @@ def _row_to_dict(table, index: int) -> dict:
 class InstallConfig(BaseModel):
     test_cmd: str
     log_parser: str
-    install: str = ""
+    install: str | list[str] = ""
     base_image_name: str = ""
     docker_specs: dict = {}
 
