@@ -30,7 +30,7 @@ def build_index(data_dir: Path) -> dict:
     total_rows = cum
 
     # Read only install_config column to filter valid rows
-    table = pq.read_table(data_dir, columns=["install_config"])
+    table = pq.read_table(paths, columns=["install_config"])
     col = table.column("install_config")
     valid_indices = []
     for i in range(len(col)):

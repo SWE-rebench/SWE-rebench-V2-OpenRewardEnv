@@ -2,6 +2,7 @@
 import base64
 import json
 import os
+import re
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -67,7 +68,15 @@ class _TaskIndex:
         raise IndexError(f"local index {local_idx} not found in {path}")
 
 
-_dataset = _TaskIndex(INDEX_PATH, DATA_DIR)
+_dataset: _TaskIndex | None = None
+
+
+def _get_dataset() -> _TaskIndex:
+    """Lazy singleton for the task index."""
+    global _dataset
+    if _dataset is None:
+        _dataset = _TaskIndex(INDEX_PATH, DATA_DIR)
+    return _dataset
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +150,15 @@ def _text_output(text: str, finished: bool = False) -> ToolOutput:
     return ToolOutput(blocks=[TextBlock(text=text)], finished=finished)
 
 
+# Same pattern as ANSI_ESCAPE_RE in log_parsers.py
+_ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _strip_ansi(s: str) -> str:
+    """Remove ANSI escape sequences from a string."""
+    return _ANSI_RE.sub("", s).strip()
+
+
 def _shell_quote(s: str) -> str:
     return "'" + s.replace("'", "'\"'\"'") + "'"
 
@@ -190,13 +208,13 @@ class SWERebenchV2(Environment):
     async def num_tasks(cls, split: str) -> int:
         if split != "train":
             raise ValueError(f"Unknown split: {split!r}")
-        return _dataset.num_tasks
+        return _get_dataset().num_tasks
 
     @classmethod
     async def get_task(cls, split: str, index: int) -> JSONObject:
         if split != "train":
             raise ValueError(f"Unknown split: {split!r}")
-        row = _dataset.get_row(index)
+        row = _get_dataset().get_row(index)
         # Build a TaskSpec-shaped dict, excluding the gold patch
         install_config = row.get("install_config", {})
         if isinstance(install_config, str):
@@ -215,8 +233,8 @@ class SWERebenchV2(Environment):
             "problem_statement": row["problem_statement"],
             "image_name": row["image_name"],
             "language": row["language"],
-            "FAIL_TO_PASS": fail_to_pass,
-            "PASS_TO_PASS": pass_to_pass,
+            "FAIL_TO_PASS": [_strip_ansi(t) for t in fail_to_pass],
+            "PASS_TO_PASS": [_strip_ansi(t) for t in pass_to_pass],
             "install_config": install_config,
         }
 
