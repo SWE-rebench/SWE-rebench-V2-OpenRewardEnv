@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 from openreward import AsyncOpenReward, SandboxSettings
 from openreward.environments import Environment, Server, tool
@@ -18,42 +17,57 @@ from log_parsers import TestStatus
 # ---------------------------------------------------------------------------
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/orwd_data"))
-_table = None  # pyarrow.Table, lazily loaded
+INDEX_PATH = Path(os.getenv("TASK_INDEX", DATA_DIR / "task_index.json"))
 
 
-def _has_valid_docker_specs(row_dict: dict) -> bool:
-    """Check if a row has a valid (non-None) docker_specs in its install_config."""
-    ic = row_dict.get("install_config", {})
-    if isinstance(ic, str):
-        ic = json.loads(ic)
-    return ic.get("docker_specs") is not None
+class _TaskIndex:
+    """Precomputed task index loaded from task_index.json.
 
-
-def _load_table():
-    """Load parquet files from DATA_DIR into a global Arrow table (lazy, cached).
-
-    Filters out rows whose install_config has no docker_specs.
+    Built once by build_index.py, loaded here for O(1) lookups.
+    Individual rows are fetched from parquet by targeting the exact row group.
     """
-    global _table
-    if _table is None:
-        parquet_files = sorted(DATA_DIR.glob("*.parquet"))
-        if not parquet_files:
-            raise FileNotFoundError(f"No .parquet files found in {DATA_DIR}")
-        full_table = pq.read_table(DATA_DIR)
-        # Filter out tasks with missing docker_specs
-        keep = []
-        for i in range(len(full_table)):
-            row = {k: v[0] for k, v in full_table.slice(i, 1).to_pydict().items()}
-            keep.append(_has_valid_docker_specs(row))
-        mask = pa.array(keep)
-        _table = full_table.filter(mask)
-    return _table
+
+    def __init__(self, index_path: Path, data_dir: Path):
+        raw = json.loads(index_path.read_text())
+        self._valid_indices: list[int] = raw["valid_indices"]
+        self._files: list[tuple[Path, int, int]] = [
+            (data_dir / f["path"], f["offset"], f["num_rows"])
+            for f in raw["files"]
+        ]
+
+    @property
+    def num_tasks(self) -> int:
+        return len(self._valid_indices)
+
+    def get_row(self, filtered_idx: int) -> dict:
+        """Read a single row by filtered index from the correct row group."""
+        if filtered_idx < 0 or filtered_idx >= len(self._valid_indices):
+            raise IndexError(
+                f"index {filtered_idx} out of range (0..{len(self._valid_indices) - 1})"
+            )
+        raw_idx = self._valid_indices[filtered_idx]
+
+        for path, cum_start, n_rows in self._files:
+            if raw_idx < cum_start + n_rows:
+                return self._read_row(path, raw_idx - cum_start)
+        raise IndexError(f"raw index {raw_idx} not found in any file")
+
+    @staticmethod
+    def _read_row(path: Path, local_idx: int) -> dict:
+        """Read one row from a parquet file via its row group."""
+        pf = pq.ParquetFile(path)
+        offset = 0
+        for rg_idx in range(pf.metadata.num_row_groups):
+            rg_rows = pf.metadata.row_group(rg_idx).num_rows
+            if local_idx < offset + rg_rows:
+                rg_table = pf.read_row_group(rg_idx)
+                row = rg_table.slice(local_idx - offset, 1).to_pydict()
+                return {k: v[0] for k, v in row.items()}
+            offset += rg_rows
+        raise IndexError(f"local index {local_idx} not found in {path}")
 
 
-def _row_to_dict(table, index: int) -> dict:
-    """Extract a single row from the Arrow table as a Python dict."""
-    row = table.slice(index, 1).to_pydict()
-    return {k: v[0] for k, v in row.items()}
+_dataset = _TaskIndex(INDEX_PATH, DATA_DIR)
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +166,7 @@ class SWERebenchV2(Environment):
         self.parsed = TaskSpec.model_validate(task_spec)
 
         self.or_client = AsyncOpenReward(api_key=secrets.get("api_key"))
-        self.workdir: str = ""  # resolved in setup() from container WORKDIR
+        self.workdir: str | None = None  # resolved in setup() from container WORKDIR
         self.sandbox_settings = SandboxSettings(
             environment=ENVIRONMENT_NAME,
             image=self.parsed.image_name,
@@ -176,17 +190,13 @@ class SWERebenchV2(Environment):
     async def num_tasks(cls, split: str) -> int:
         if split != "train":
             raise ValueError(f"Unknown split: {split!r}")
-        table = _load_table()
-        return len(table)
+        return _dataset.num_tasks
 
     @classmethod
     async def get_task(cls, split: str, index: int) -> JSONObject:
         if split != "train":
             raise ValueError(f"Unknown split: {split!r}")
-        table = _load_table()
-        if index < 0 or index >= len(table):
-            raise IndexError(f"index {index} out of range (0..{len(table) - 1})")
-        row = _row_to_dict(table, index)
+        row = _dataset.get_row(index)
         # Build a TaskSpec-shaped dict, excluding the gold patch
         install_config = row.get("install_config", {})
         if isinstance(install_config, str):
@@ -217,7 +227,7 @@ class SWERebenchV2(Environment):
         # SWE-rebench V2 images use /{project_name} as WORKDIR (not /testbed).
         # Query the container's actual WORKDIR so we don't have to guess.
         res = await self.sandbox.run("pwd")
-        self.workdir = res.output.strip()
+        self.workdir = (res.output if hasattr(res, 'output') else res[0]).strip()
         # Configure git
         await self.sandbox.run(
             f"cd {_shell_quote(self.workdir)} && "
