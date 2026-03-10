@@ -131,13 +131,6 @@ def _shell_quote(s: str) -> str:
     return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
-def _get_workdir(repo: str) -> str:
-    """Derive the working directory inside the sandbox from the repo name."""
-    # Repos in the dataset are like "owner/name"; the sandbox image typically
-    # clones into /testbed or /<repo_name>.  SWE-bench convention is /testbed.
-    return "/testbed"
-
-
 def _get_log_parser(parser_name: str):
     """Import and return the log parser function by name."""
     import log_parsers
@@ -159,7 +152,7 @@ class SWERebenchV2(Environment):
         self.parsed = TaskSpec.model_validate(task_spec)
 
         self.or_client = AsyncOpenReward(api_key=secrets.get("api_key"))
-        self.workdir = _get_workdir(self.parsed.repo)
+        self.workdir: str = ""  # resolved in setup() from container WORKDIR
         self.sandbox_settings = SandboxSettings(
             environment=ENVIRONMENT_NAME,
             image=self.parsed.image_name,
@@ -221,6 +214,10 @@ class SWERebenchV2(Environment):
 
     async def setup(self):
         await self.sandbox.start()
+        # SWE-rebench V2 images use /{project_name} as WORKDIR (not /testbed).
+        # Query the container's actual WORKDIR so we don't have to guess.
+        res = await self.sandbox.run("pwd")
+        self.workdir = res.output.strip()
         # Configure git
         await self.sandbox.run(
             f"cd {_shell_quote(self.workdir)} && "
