@@ -30,6 +30,7 @@ def build_index(data_dir: Path) -> dict:
     total_rows = cum
 
     # Read only install_config column to filter valid rows
+    # A task is valid if it has a test_cmd (required to evaluate patches).
     table = pq.read_table(paths, columns=["install_config"])
     col = table.column("install_config")
     valid_indices = []
@@ -37,7 +38,7 @@ def build_index(data_dir: Path) -> dict:
         ic = col[i].as_py()
         if isinstance(ic, str):
             ic = json.loads(ic)
-        if isinstance(ic, dict) and ic.get("docker_specs") is not None:
+        if isinstance(ic, dict) and ic.get("test_cmd"):
             valid_indices.append(i)
     del table, col
 
