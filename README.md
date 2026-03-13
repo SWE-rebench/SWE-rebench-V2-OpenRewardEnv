@@ -4,7 +4,7 @@
 
 ## Description
 
-SWE-rebench-V2 is an OpenReward port of the [SWE-rebench V2](https://github.com/SWE-rebench/SWE-rebench-V2) benchmark by Badertdinov et al. (Nebius AI). It evaluates agents on real-world software engineering tasks across multiple programming languages. Agents are given a repository checked out to a specific commit and a problem statement, and must modify the source code so that previously-failing tests pass without breaking existing tests. The dataset covers 32K+ instances across Python, JavaScript, Go, Rust, Java, Ruby, and many more languages.
+SWE-rebench-V2 is an OpenReward port of the [SWE-rebench V2](https://github.com/SWE-rebench/SWE-rebench-V2) dataset by Badertdinov et al. (Nebius AI). It evaluates agents on real-world software engineering tasks across multiple programming languages. Agents are given a repository checked out to a specific commit and a problem statement, and must modify the source code so that previously-failing tests pass without breaking existing tests. The dataset covers 32K+ instances across Python, JavaScript, Go, Rust, Java, Ruby, and many more languages.
 
 ## Community
 
