@@ -88,7 +88,6 @@ class InstallConfig(BaseModel):
     log_parser: str
     install: str | list[str] = ""
     base_image_name: str = ""
-    docker_specs: dict = {}
 
 
 class TaskSpec(BaseModel):
