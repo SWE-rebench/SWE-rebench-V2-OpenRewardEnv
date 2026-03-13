@@ -65,17 +65,17 @@ def print_tool_result(tool_name, tool_result):
             print(f"  {DIM}│ [image: {block.mimeType}]{RESET}")
     print()
 
-environment = or_client.environments.get(name="GeneralReasoning/swe-rebench-v2")
+environment = or_client.environments.get(name="nebius/SWE-rebench-V2")
 tools = environment.list_tools(format="openai")
 
 TASK_INDEX = 1
 
 with environment.session(split="train", index=TASK_INDEX) as session:
 
-    index_meta = json.loads(open(os.path.expanduser("~/data/swe-rebench-v2/task_index.json")).read())
+    index_meta = json.loads(open(os.path.expanduser("~/data/SWE-rebench-V2/task_index.json")).read())
     raw_idx = index_meta["valid_indices"][TASK_INDEX]
 
-    parquet_files = sorted(Path(os.path.expanduser("~/data/swe-rebench-v2")).glob("*.parquet"))
+    parquet_files = sorted(Path(os.path.expanduser("~/data/SWE-rebench-V2")).glob("*.parquet"))
     table = pq.read_table(parquet_files, columns=["instance_id", "patch", "test_patch", "FAIL_TO_PASS"])
     instance_id = table.column("instance_id")[raw_idx].as_py()
     gold_patch = table.column("patch")[raw_idx].as_py()
@@ -97,9 +97,9 @@ with environment.session(split="train", index=TASK_INDEX) as session:
     print_separator()
 
     rollout = or_client.rollout.create(
-        run_name="swe-rebench-v2-train-quickstart",
+        run_name="SWE-rebench-V2-train-quickstart",
         rollout_name="example_task",
-        environment="GeneralReasoning/swe-rebench-v2",
+        environment="nebius/SWE-rebench-V2",
         split="train",
     )
 

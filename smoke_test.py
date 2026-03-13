@@ -1,8 +1,8 @@
 """Smoke test: verify reward=0 before patch, reward=1 after gold patch.
 
 Usage:
-    python smoke_test.py --data-dir ~/data/swe-rebench-v2
-    python smoke_test.py --data-dir ~/data/swe-rebench-v2 --index 5 -v
+    python smoke_test.py --data-dir ~/data/SWE-rebench-V2
+    python smoke_test.py --data-dir ~/data/SWE-rebench-V2 --index 5 -v
 """
 import argparse
 import base64
@@ -65,7 +65,7 @@ print(f"FAIL_TO_PASS ({len(fail_to_pass)}): {fail_to_pass[:3]}{'...' if len(fail
 print(f"PASS_TO_PASS: {len(pass_to_pass)} tests\n")
 
 or_client = OpenReward()
-environment = or_client.environments.get(name="GeneralReasoning/swe-rebench-v2")
+environment = or_client.environments.get(name="nebius/SWE-rebench-V2")
 
 ok = True
 
