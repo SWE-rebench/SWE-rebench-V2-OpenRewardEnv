@@ -1,6 +1,5 @@
 """OpenReward environment for SWE-rebench-V2."""
 import base64
-import json
 import os
 import re
 from pathlib import Path
@@ -14,69 +13,21 @@ from pydantic import BaseModel, Field
 from log_parsers import TestStatus
 
 # ---------------------------------------------------------------------------
-# Dataset loading from parquet
+# Dataset loading — full Arrow table in memory (column-pruned, ~2 GB)
 # ---------------------------------------------------------------------------
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/orwd_data"))
-INDEX_PATH = Path(os.getenv("TASK_INDEX", DATA_DIR / "task_index.json"))
 
+_TASK_COLUMNS = [
+    "instance_id", "repo", "base_commit", "test_patch", "problem_statement",
+    "image_name", "language", "FAIL_TO_PASS", "PASS_TO_PASS", "install_config",
+]
 
-class _TaskIndex:
-    """Precomputed task index loaded from task_index.json.
+_parquet_path = DATA_DIR / "data.parquet"
+if not _parquet_path.exists():
+    _parquet_path = Path("data") / "data.parquet"
 
-    Built once by build_index.py, loaded here for O(1) lookups.
-    Individual rows are fetched from parquet by targeting the exact row group.
-    """
-
-    def __init__(self, index_path: Path, data_dir: Path):
-        raw = json.loads(index_path.read_text())
-        self._valid_indices: list[int] = raw["valid_indices"]
-        self._files: list[tuple[Path, int, int]] = [
-            (data_dir / f["path"], f["offset"], f["num_rows"])
-            for f in raw["files"]
-        ]
-
-    @property
-    def num_tasks(self) -> int:
-        return len(self._valid_indices)
-
-    def get_row(self, filtered_idx: int) -> dict:
-        """Read a single row by filtered index from the correct row group."""
-        if filtered_idx < 0 or filtered_idx >= len(self._valid_indices):
-            raise IndexError(
-                f"index {filtered_idx} out of range (0..{len(self._valid_indices) - 1})"
-            )
-        raw_idx = self._valid_indices[filtered_idx]
-
-        for path, cum_start, n_rows in self._files:
-            if raw_idx < cum_start + n_rows:
-                return self._read_row(path, raw_idx - cum_start)
-        raise IndexError(f"raw index {raw_idx} not found in any file")
-
-    @staticmethod
-    def _read_row(path: Path, local_idx: int) -> dict:
-        """Read one row from a parquet file via its row group."""
-        pf = pq.ParquetFile(path)
-        offset = 0
-        for rg_idx in range(pf.metadata.num_row_groups):
-            rg_rows = pf.metadata.row_group(rg_idx).num_rows
-            if local_idx < offset + rg_rows:
-                rg_table = pf.read_row_group(rg_idx)
-                row = rg_table.slice(local_idx - offset, 1).to_pydict()
-                return {k: v[0] for k, v in row.items()}
-            offset += rg_rows
-        raise IndexError(f"local index {local_idx} not found in {path}")
-
-
-_dataset: _TaskIndex | None = None
-
-
-def _get_dataset() -> _TaskIndex:
-    """Lazy singleton for the task index."""
-    global _dataset
-    if _dataset is None:
-        _dataset = _TaskIndex(INDEX_PATH, DATA_DIR)
-    return _dataset
+_TASK_TABLE = pq.read_table(str(_parquet_path), columns=_TASK_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
@@ -207,35 +158,22 @@ class SWERebenchV2(Environment):
     async def num_tasks(cls, split: str) -> int:
         if split != "train":
             raise ValueError(f"Unknown split: {split!r}")
-        return _get_dataset().num_tasks
+        return _TASK_TABLE.num_rows
 
     @classmethod
     async def get_task(cls, split: str, index: int) -> JSONObject:
         if split != "train":
             raise ValueError(f"Unknown split: {split!r}")
-        row = _get_dataset().get_row(index)
-        # Build a TaskSpec-shaped dict, excluding the gold patch
-        install_config = row.get("install_config", {})
-        if isinstance(install_config, str):
-            install_config = json.loads(install_config)
-        fail_to_pass = row.get("FAIL_TO_PASS", [])
-        if isinstance(fail_to_pass, str):
-            fail_to_pass = json.loads(fail_to_pass)
-        pass_to_pass = row.get("PASS_TO_PASS", [])
-        if isinstance(pass_to_pass, str):
-            pass_to_pass = json.loads(pass_to_pass)
-        return {
-            "instance_id": row["instance_id"],
-            "repo": row["repo"],
-            "base_commit": row["base_commit"],
-            "test_patch": row["test_patch"],
-            "problem_statement": row["problem_statement"],
-            "image_name": row["image_name"],
-            "language": row["language"],
-            "FAIL_TO_PASS": [_strip_ansi(t) for t in fail_to_pass],
-            "PASS_TO_PASS": [_strip_ansi(t) for t in pass_to_pass],
-            "install_config": install_config,
-        }
+        if index < 0 or index >= _TASK_TABLE.num_rows:
+            raise IndexError(
+                f"Task index {index} out of range (0..{_TASK_TABLE.num_rows - 1})"
+            )
+
+        row_slice = _TASK_TABLE.slice(index, 1)
+        row = {col: row_slice.column(col)[0].as_py() for col in _TASK_COLUMNS}
+        row["FAIL_TO_PASS"] = [_strip_ansi(t) for t in row["FAIL_TO_PASS"]]
+        row["PASS_TO_PASS"] = [_strip_ansi(t) for t in row["PASS_TO_PASS"]]
+        return row
 
     # ----- lifecycle -----
 
